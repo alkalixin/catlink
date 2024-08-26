@@ -9,8 +9,8 @@ CONF_LANGUAGE = "language"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_ACCOUNTS = 'accounts'
 
-DEFAULT_API_BASE = 'https://app.catlinks.cn/api/'
-SCAN_INTERVAL = timedelta(minutes=1)
+DEFAULT_API_BASE = 'https://app-sh.catlinks.cn/api/'
+SCAN_INTERVAL = timedelta(seconds=30)
 
 
 SIGN_KEY = '00109190907746a7ad0e2139b6d09ce47551770157fe4ac5922f3a5454c82712'
