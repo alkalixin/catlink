@@ -1,49 +1,41 @@
 """The component."""
 
+from asyncio import TimeoutError, gather
 import base64
 import datetime
 import hashlib
 import logging
 import time
-from asyncio import TimeoutError
 
 from aiohttp import ClientConnectorError
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+
 from homeassistant.components import persistent_notification
-from homeassistant.components.binary_sensor import (
-    DOMAIN as BINARY_SENSOR_DOMAIN,
-)
-from homeassistant.components.button import (
-    DOMAIN as BUTTON_DOMAIN,
-)
-from homeassistant.components.select import (
-    DOMAIN as SELECT_DOMAIN,
-)
+from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
+from homeassistant.components.button import DOMAIN as BUTTON_DOMAIN
+from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
 from homeassistant.components.sensor import (
     DOMAIN as SENSOR_DOMAIN,
     SensorDeviceClass,
     SensorStateClass,
 )
-from homeassistant.components.switch import (
-    DOMAIN as SWITCH_DOMAIN,
-)
+from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    CONF_TOKEN,
     CONF_DEVICES,
+    CONF_LANGUAGE,
     CONF_PASSWORD,
     CONF_SCAN_INTERVAL,
-    CONF_LANGUAGE,
-    UnitOfTemperature,
-    UnitOfMass,
+    CONF_TOKEN,
     PERCENTAGE,
+    UnitOfMass,
+    UnitOfTemperature,
     UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import aiohttp_client
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import aiohttp_client, device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
@@ -54,19 +46,18 @@ from homeassistant.helpers.update_coordinator import (
 _LOGGER = logging.getLogger(__name__)
 
 from .const import (
-    DOMAIN,
+    CONF_ACCOUNTS,
     CONF_API_BASE,
+    CONF_LANGUAGE,
+    CONF_PASSWORD,
     CONF_PHONE,
     CONF_PHONE_IAC,
-    CONF_PASSWORD,
-    CONF_LANGUAGE,
     CONF_SCAN_INTERVAL,
     DEFAULT_API_BASE,
-    SCAN_INTERVAL,
-    CONF_ACCOUNTS,
-    SIGN_KEY,
+    DOMAIN,
     RSA_PUBLIC_KEY,
-    RSA_PRIVATE_KEY,
+    SCAN_INTERVAL,
+    SIGN_KEY,
 )
 
 SUPPORTED_DOMAINS = [
@@ -114,13 +105,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
-    coordinator = hass.data[DOMAIN].pop(entry.entry_id)
-    for platform in SUPPORTED_DOMAINS:
-        await hass.config_entries.async_forward_entry_unload(entry, platform)
-
-    return True
+async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry):
+    unload_ok = all(
+        await gather(
+            *[
+                hass.config_entries.async_forward_entry_unload(config_entry, sd)
+                for sd in SUPPORTED_DOMAINS
+            ]
+        )
+    )
+    if unload_ok:
+        hass.data[DOMAIN].pop(config_entry.entry_id, None)
+        hass.data[DOMAIN]["sub_entities"] = {}
+    return unload_ok
 
 
 async def async_setup(hass: HomeAssistant, hass_config: dict):
