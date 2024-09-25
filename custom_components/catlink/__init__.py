@@ -946,24 +946,10 @@ class ScooperDevice(Device):
 
     @property
     def hass_sensor(self):
-        return {
+        obj = {
             "state": {
                 "icon": "mdi:information",
                 "state_attrs": self.state_attrs,
-            },
-            "temperature": {
-                "icon": "mdi:temperature-celsius",
-                "state": self.temperature,
-                "device_class": SensorDeviceClass.TEMPERATURE,
-                "unit": UnitOfTemperature.CELSIUS,
-                "state_class": SensorStateClass.MEASUREMENT,
-            },
-            "humidity": {
-                "icon": "mdi:water-percent",
-                "state": self.humidity,
-                "device_class": SensorDeviceClass.HUMIDITY,
-                "unit": PERCENTAGE,
-                "state_class": SensorStateClass.MEASUREMENT,
             },
             "catLitterWeight": {
                 "icon": "mdi:home-percent-outline",
@@ -982,6 +968,26 @@ class ScooperDevice(Device):
                 "state_attrs": self.last_log_attrs,
             },
         }
+
+        if self.temperature:
+            obj.temperature = {
+                "icon": "mdi:temperature-celsius",
+                "state": self.temperature,
+                "device_class": SensorDeviceClass.TEMPERATURE,
+                "unit": UnitOfTemperature.CELSIUS,
+                "state_class": SensorStateClass.MEASUREMENT,
+            }
+
+        if self.humidity:
+            obj.humidity = {
+                "icon": "mdi:water-percent",
+                "state": self.humidity,
+                "device_class": SensorDeviceClass.HUMIDITY,
+                "unit": PERCENTAGE,
+                "state_class": SensorStateClass.MEASUREMENT,
+            }
+
+        return obj
 
     @property
     def hass_select(self):
