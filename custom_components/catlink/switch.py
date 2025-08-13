@@ -4,17 +4,36 @@ import asyncio
 import logging
 
 from homeassistant.components.switch import DOMAIN as ENTITY_DOMAIN, SwitchEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from . import DOMAIN, CatlinkBinaryEntity, async_setup_accounts
+from . import DOMAIN, CatlinkBinaryEntity
 
 _LOGGER = logging.getLogger(__name__)
 
 DATA_KEY = f"{ENTITY_DOMAIN}.{DOMAIN}"
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    hass.data[DOMAIN]["add_entities"][ENTITY_DOMAIN] = async_add_entities
-    await async_setup_accounts(hass, ENTITY_DOMAIN)
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the CatLink switches."""
+    coordinator = config_entry.runtime_data
+    
+    # Create switch entities for all devices
+    entities = []
+    for device in coordinator.device_list:
+        if hasattr(device, 'hass_switch'):
+            for switch_key, switch_config in device.hass_switch.items():
+                entities.append(
+                    CatlinkSwitchEntity(switch_key, device, switch_config)
+                )
+    
+    if entities:
+        async_add_entities(entities)
 
 
 class CatlinkSwitchEntity(CatlinkBinaryEntity, SwitchEntity):

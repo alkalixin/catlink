@@ -30,6 +30,7 @@ from homeassistant.const import (
     CONF_SCAN_INTERVAL,
     CONF_TOKEN,
     PERCENTAGE,
+    Platform,
     UnitOfMass,
     UnitOfTemperature,
     UnitOfTime,
@@ -60,83 +61,127 @@ from .const import (
     SIGN_KEY,
 )
 
-SUPPORTED_DOMAINS = [
-    SENSOR_DOMAIN,
-    BINARY_SENSOR_DOMAIN,
-    SWITCH_DOMAIN,
-    SELECT_DOMAIN,
-    BUTTON_DOMAIN,
+PLATFORMS: list[Platform] = [
+    Platform.SENSOR,
+    Platform.BINARY_SENSOR,
+    Platform.SWITCH,
+    Platform.SELECT,
+    Platform.BUTTON,
 ]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Catlink from a config entry."""
-    hass.data.setdefault(DOMAIN, {})
-    # Get the session and create your API client here
-    acc = Account(hass, dict(entry.data))
-    coordinator = DevicesCoordinator(acc)
+    # 确保数据存储结构完整初始化
+    if DOMAIN not in hass.data:
+        hass.data[DOMAIN] = {
+            CONF_ACCOUNTS: {},
+            CONF_DEVICES: {},
+            "coordinators": {},
+        }
+    
+    try:
+        # Get the session and create your API client here
+        acc = Account(hass, dict(entry.data))
+        coordinator = DevicesCoordinator(acc)
 
-    # Fetch initial data
-    await acc.async_check_auth()
-    await coordinator.async_config_entry_first_refresh()
+        # Fetch initial data
+        await acc.async_check_auth()
+        await coordinator.async_config_entry_first_refresh()
 
-    # Store the coordinator
-    hass.data[DOMAIN][CONF_ACCOUNTS][acc.uid] = acc
-    hass.data[DOMAIN]["coordinators"][entry.entry_id] = coordinator
+        # Store the coordinator
+        hass.data[DOMAIN][CONF_ACCOUNTS][acc.uid] = acc
+        hass.data[DOMAIN]["coordinators"][entry.entry_id] = coordinator
 
-    # Register the device in the device registry
-    for dvc in coordinator.device_list:
-        device_registry = dr.async_get(hass)
-        device_registry.async_get_or_create(
-            config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, dvc.id)},
-            name=dvc.name,
-            manufacturer="CatLink",
-            model=dvc.model,
-            sw_version=dvc.firmwareVersion,
-        )
-        _LOGGER.debug(f"Registering device: {dvc.id}, {dvc.name}")
+        # Register the device in the device registry
+        if hasattr(coordinator, 'device_list') and coordinator.device_list:
+            device_registry = dr.async_get(hass)
+            for dvc in coordinator.device_list:
+                device_registry.async_get_or_create(
+                    config_entry_id=entry.entry_id,
+                    identifiers={(DOMAIN, dvc.id)},
+                    name=dvc.name,
+                    manufacturer="CatLink",
+                    model=dvc.model,
+                    sw_version=dvc.firmwareVersion,
+                )
+                _LOGGER.debug(f"Registering device: {dvc.id}, {dvc.name}")
 
-    for platform in SUPPORTED_DOMAINS:
-        hass.async_create_task(
-            hass.config_entries.async_forward_entry_setup(entry, platform)
-        )
+        # Store runtime data for platforms to access
+        entry.runtime_data = coordinator
 
-    return True
+        # Forward the setup to the platforms
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        
+        return True
+        
+    except Exception as e:
+        _LOGGER.error(f"Failed to setup CatLink integration: {e}")
+        # 清理已创建的资源
+        if DOMAIN in hass.data:
+            hass.data[DOMAIN].pop(entry.entry_id, None)
+        return False
 
 
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry):
-    unload_ok = all(
-        await gather(
-            *[
-                hass.config_entries.async_forward_entry_unload(config_entry, sd)
-                for sd in SUPPORTED_DOMAINS
-            ]
-        )
-    )
-    if unload_ok:
-        hass.data[DOMAIN].pop(config_entry.entry_id, None)
-        hass.data[DOMAIN]["sub_entities"] = {}
-    return unload_ok
+    """Unload a config entry."""
+    try:
+        # Unload platforms first
+        unload_ok = await hass.config_entries.async_unload_platforms(config_entry, PLATFORMS)
+        
+        if unload_ok and DOMAIN in hass.data:
+            # 清理相关的coordinator
+            if "coordinators" in hass.data[DOMAIN]:
+                hass.data[DOMAIN]["coordinators"].pop(config_entry.entry_id, None)
+            
+            # 清理设备数据
+            if CONF_DEVICES in hass.data[DOMAIN]:
+                # 移除与此配置条目相关的设备
+                devices_to_remove = []
+                for device_id, device in hass.data[DOMAIN][CONF_DEVICES].items():
+                    if hasattr(device, 'coordinator') and hasattr(device.coordinator, 'account'):
+                        if device.coordinator.account.uid in hass.data[DOMAIN].get(CONF_ACCOUNTS, {}):
+                            devices_to_remove.append(device_id)
+                
+                for device_id in devices_to_remove:
+                    hass.data[DOMAIN][CONF_DEVICES].pop(device_id, None)
+            
+            # 清理账户数据
+            if CONF_ACCOUNTS in hass.data[DOMAIN]:
+                # 找到与此配置条目相关的账户并移除
+                accounts_to_remove = []
+                for uid, account in hass.data[DOMAIN][CONF_ACCOUNTS].items():
+                    if hasattr(account, '_config') and account._config.get('entry_id') == config_entry.entry_id:
+                        accounts_to_remove.append(uid)
+                
+                for uid in accounts_to_remove:
+                    hass.data[DOMAIN][CONF_ACCOUNTS].pop(uid, None)
+        
+        _LOGGER.info(f"Successfully unloaded CatLink integration for entry: {config_entry.entry_id}")
+        return unload_ok
+        
+    except Exception as e:
+        _LOGGER.error(f"Failed to unload CatLink integration: {e}")
+        return False
 
 
 async def async_setup(hass: HomeAssistant, hass_config: dict):
+    """Set up the CatLink component."""
     hass.data.setdefault(
         DOMAIN,
         {
             CONF_ACCOUNTS: {},
             CONF_DEVICES: {},
             "coordinators": {},
-            "add_entities": {},
         },
     )
     return True
 
 
 async def async_setup_accounts(hass: HomeAssistant, domain):
-    for coordinator in hass.data[DOMAIN]["coordinators"].values():
-        for k, sta in coordinator.data.items():
-            await coordinator.update_hass_entities(domain, sta)
+    """Set up accounts for a specific domain."""
+    # This function is now handled by individual platform files
+    pass
 
 
 class Account:
@@ -309,62 +354,54 @@ class DevicesCoordinator(DataUpdateCoordinator):
         self._subs = {}
 
     async def _async_update_data(self):
-        dls = await self.account.get_devices()
-        self.device_list = []
-        for dat in dls:
-            did = dat.get("id")
-            if not did:
-                continue
-            old = self.hass.data[DOMAIN][CONF_DEVICES].get(did)
-            if old:
-                dvc = old
-                dvc.update_data(dat)
-            else:
-                typ = dat.get("deviceType")
-                if typ in ["SCOOPER"]:
-                    dvc = ScooperDevice(dat, self)
-                elif typ in ["FEEDER", "FEEDER_PRO"]:
-                    dvc = FeederDevice(dat, self)
-                elif typ in ["PUREPRO"]:
-                    dvc = FountainDevice(dat, self)
+        """Update device data."""
+        try:
+            dls = await self.account.get_devices()
+            if not dls:
+                _LOGGER.warning("No devices found for account %s", self.account.phone)
+                self.device_list = []
+                return {}
+                
+            self.device_list = []
+            for dat in dls:
+                did = dat.get("id")
+                if not did:
+                    continue
+                    
+                old = self.hass.data[DOMAIN][CONF_DEVICES].get(did)
+                if old:
+                    dvc = old
+                    dvc.update_data(dat)
                 else:
-                    dvc = Device(dat, self)
-                self.hass.data[DOMAIN][CONF_DEVICES][did] = dvc
-            await dvc.async_init()
-            for d in SUPPORTED_DOMAINS:
-                await self.update_hass_entities(d, dvc)
-            self.device_list.append(dvc)
-        return self.hass.data[DOMAIN][CONF_DEVICES]
+                    typ = dat.get("deviceType")
+                    if typ in ["SCOOPER"]:
+                        dvc = ScooperDevice(dat, self)
+                    elif typ in ["FEEDER", "FEEDER_PRO"]:
+                        dvc = FeederDevice(dat, self)
+                    elif typ in ["PUREPRO"]:
+                        dvc = FountainDevice(dat, self)
+                    else:
+                        dvc = Device(dat, self)
+                    self.hass.data[DOMAIN][CONF_DEVICES][did] = dvc
+                    
+                try:
+                    await dvc.async_init()
+                    self.device_list.append(dvc)
+                except Exception as e:
+                    _LOGGER.error(f"Failed to initialize device {did}: {e}")
+                    continue
+                    
+            return self.hass.data[DOMAIN][CONF_DEVICES]
+            
+        except Exception as e:
+            _LOGGER.error(f"Failed to update device data: {e}")
+            self.device_list = []
+            return {}
 
     async def update_hass_entities(self, domain, dvc):
-        from .sensor import CatlinkSensorEntity
-        from .binary_sensor import CatlinkBinarySensorEntity
-        from .switch import CatlinkSwitchEntity
-        from .select import CatlinkSelectEntity
-        from .button import CatlinkButtonEntity
-
-        hdk = f"hass_{domain}"
-        add = self.hass.data[DOMAIN]["add_entities"].get(domain)
-        if not add or not hasattr(dvc, hdk):
-            return
-        for k, cfg in getattr(dvc, hdk).items():
-            key = f"{domain}.{k}.{dvc.id}"
-            new = None
-            if key in self._subs:
-                pass
-            elif domain == "sensor":
-                new = CatlinkSensorEntity(k, dvc, cfg)
-            elif domain == "binary_sensor":
-                new = CatlinkBinarySensorEntity(k, dvc, cfg)
-            elif domain == "switch":
-                new = CatlinkSwitchEntity(k, dvc, cfg)
-            elif domain == "select":
-                new = CatlinkSelectEntity(k, dvc, cfg)
-            elif domain == "button":
-                new = CatlinkButtonEntity(k, dvc, cfg)
-            if new:
-                self._subs[key] = new
-                add([new])
+        """Update Home Assistant entities for a device."""
+        # This method is now handled by individual platform files
+        pass
 
 
 class Device:
@@ -387,7 +424,6 @@ class Device:
             update_method=self.update_logs,
             update_interval=datetime.timedelta(minutes=1),
         )
-        await self.coordinator_logs.async_config_entry_first_refresh()
 
     async def update_device_detail(self):
         pass
@@ -970,7 +1006,7 @@ class ScooperDevice(Device):
         }
 
         if self.temperature:
-            obj.temperature = {
+            obj["temperature"] = {
                 "icon": "mdi:temperature-celsius",
                 "state": self.temperature,
                 "device_class": SensorDeviceClass.TEMPERATURE,
@@ -979,7 +1015,7 @@ class ScooperDevice(Device):
             }
 
         if self.humidity:
-            obj.humidity = {
+            obj["humidity"] = {
                 "icon": "mdi:water-percent",
                 "state": self.humidity,
                 "device_class": SensorDeviceClass.HUMIDITY,
@@ -1022,7 +1058,6 @@ class CatlinkEntity(CoordinatorEntity):
         self.entity_id = f"{DOMAIN}.{device.type.lower()}_{mac}_{entity_key}"
 
         self._option = option or {}
-        self._attr_unit_of_measurement = option.get("unit")
         self._attr_native_unit_of_measurement = option.get("unit")
         self._attr_state_class = option.get("state_class")
         self._attr_device_class = option.get("device_class")
